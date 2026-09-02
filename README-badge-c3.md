@@ -13,10 +13,15 @@ Base: Bruce `dev` commit `1d555e0`.
 - Binário: `pio run -e badge-c3` → `Bruce-badge-c3.bin` (~3.9 MB).
 - **Boot:** o app (3.67 MB) exige a partição `custom_4Mb_full.csv` (factory 3.75 MB);
   com a `custom_4Mb.csv` normal (2.44 MB) dá `Factory app partition is not bootable`.
-- **Estado atual:** compila, cabe, **boota**, mas crasha cedo em
-  `TFT_eSPI::writecommand` (Store access fault, MEPC 0x4214b4b8) — bring-up do
-  TFT_eSPI no C3 (SPI2 acessado antes de init). Pinos estão certos (a tela funciona
-  com Adafruit_ST7789 nos mesmos pinos). Bring-up do display = próximo trabalho.
+- **Estado atual:** compila, cabe, **boota**, mas crasha em `TFT_eSPI::writecommand`.
+  **Causa raiz (decodificada):** a instrução `sw a5,16(zero)` grava `SPI_USR_MOSI`
+  (0x08000000) no endereço absoluto `0x10`. `0x10` = offset do registrador SPI_USER
+  dentro do bloco SPI → a **base do SPI2 resolveu para 0** no processor C3 do
+  TFT_eSPI (vendorizado) com a **ESP-IDF 5.5.4** usada pelo Bruce. Ou seja:
+  incompatibilidade do TFT_eSPI (`lib/TFT_eSPI/Processors/TFT_eSPI_ESP32_C3.*`) com
+  a IDF nova no C3 — `SPI_USER_REG(SPI_PORT)` não aponta pra base correta (deveria
+  ser 0x60024000). NÃO é config: `USE_HSPI_PORT` não corrige. Pinos estão certos
+  (a tela funciona com Adafruit_ST7789 nos mesmos pinos). Fix = patch no TFT_eSPI.
 - **Pendente para rodar de verdade:** botões da badge são lidos por um expansor
   I²C **PCF8574 (0x20)**, e o Bruce espera botões em GPIO direto. Precisa de um
   `interface.cpp` custom (fase 2). Tela e LEDs já têm os pinos certos.
