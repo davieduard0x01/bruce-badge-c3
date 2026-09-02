@@ -33,9 +33,11 @@
 #if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C5) ||                              \
     defined(CONFIG_IDF_TARGET_ESP32C6)
 // Fix ESP32C3 IDF bug for missing definition (VSPI/FSPI only tested at the moment)
-#ifndef REG_SPI_BASE
+// badge-c3: a IDF 5.5 define REG_SPI_BASE(i) = ((i)==2)?base:0, e o TFT_eSPI passa
+// SPI_PORT=SPI2_HOST=1 -> base 0 -> writecommand grava em 0x10 e crasha. O C3 so tem
+// um GPSPI, entao forcamos a base do SPI2 para qualquer i (override do define da IDF).
+#undef REG_SPI_BASE
 #define REG_SPI_BASE(i) DR_REG_SPI2_BASE
-#endif
 
 // Fix ESP32C3 IDF bug for name change
 #ifndef SPI_MOSI_DLEN_REG
