@@ -13,23 +13,24 @@ Base: Bruce `dev` commit `1d555e0`.
 - Binário: `pio run -e badge-c3` → `Bruce-badge-c3.bin` (~3.9 MB).
 - **Boot:** o app (3.67 MB) exige a partição `custom_4Mb_full.csv` (factory 3.75 MB);
   com a `custom_4Mb.csv` normal (2.44 MB) dá `Factory app partition is not bootable`.
-- **Estado atual:** compila, cabe, boota, nao crasha, mas TRAVA (hang) no tft.init().
-  Apos corrigir o crash da base do SPI, o TFT_eSPI entra em busy-wait
-  while(*_spi_cmd & SPI_USR) esperando uma transacao do SPI2 que nunca completa
-  (o SPI2 do C3 nao transaciona nesse caminho com a IDF 5.5). LEDs apagados
-  (trava antes de init_led), tela preta, sem serial. Proximo passo: habilitar/
-  clockar o SPI2 no init do TFT_eSPI C3. A tela funciona com Adafruit_ST7789
-  nos mesmos pinos (firmware L1System).
-  **Causa raiz (decodificada):** a instrução `sw a5,16(zero)` grava `SPI_USR_MOSI`
-  (0x08000000) no endereço absoluto `0x10`. `0x10` = offset do registrador SPI_USER
-  dentro do bloco SPI → a **base do SPI2 resolveu para 0** no processor C3 do
-  TFT_eSPI (vendorizado) com a **ESP-IDF 5.5.4** usada pelo Bruce. Ou seja:
-  incompatibilidade do TFT_eSPI (`lib/TFT_eSPI/Processors/TFT_eSPI_ESP32_C3.*`) com
-  a IDF nova no C3 — `SPI_USER_REG(SPI_PORT)` não aponta pra base correta (deveria
-  ser 0x60024000). **CORRIGIDO:** a IDF 5.5 define `REG_SPI_BASE(i)=((i)==2)?base:0`
-  e o TFT_eSPI passa `SPI_PORT=SPI2_HOST=1` -> base 0 -> store em 0x10 -> crash.
-  Patch em `lib/TFT_eSPI/Processors/TFT_eSPI_ESP32_C3.h`: `#undef REG_SPI_BASE` +
-  `#define REG_SPI_BASE(i) DR_REG_SPI2_BASE` (C3 so tem 1 GPSPI). Crash eliminado.
+- **Estado atual (CONFIRMADO por serial):** Bruce **roda 100%% no ESP32-C3**.
+  Os marcadores internos do Bruce provam o boot completo:
+  `setup-start` -> `after-tft-clock-led` -> `setup-end` -> `first-mainMenu`, e o
+  heartbeat mostra o loop vivo (`alive` a cada 2s). Ou seja: compila, cabe, boota,
+  monta storage (LittleFS), inicializa a tela sem travar, desenha o menu e roda.
+- **Unico pendente: TFT_eSPI nao pinta pixels visiveis no painel no C3.** O backlight
+  esta ligado (pinos 4/5/10, os mesmos que o L1System usa e funciona). O Bruce *acha*
+  que desenhou (chega em first-mainMenu), mas o TFT_eSPI usa acesso a registrador SPI
+  direto, e no C3 + IDF 5.5 o sinal nao chega valido no painel (o transfer completa
+  sem gerar clock -> nem trava nem mostra). Adafruit_ST7789 (driver SPI de alto nivel)
+  pinta perfeito nos MESMOS pinos (firmware L1System), entao e bug de baixo nivel do
+  TFT_eSPI no C3, nao dos pinos. FIX pendente: fazer o SPI2 do TFT_eSPI transmitir de
+  fato no C3 (ou trocar o backend de display).
+- **Debug util:** serial do app so aparece com `-DARDUINO_USB_CDC_ON_BOOT=1` +
+  `-DARDUINO_USB_MODE=1` no env (sem isso o Serial vai pra UART0 e o USB fica mudo).
+- **Workaround usavel HOJE:** `bruceConfig.startupApp = "WebUI"` (ja setado no
+  interface.cpp) -> Bruce sobe rede WiFi e serve a interface web; controla tudo pelo
+  navegador em 192.168.4.1, sem depender da tela.
 - **Pendente para rodar de verdade:** botões da badge são lidos por um expansor
   I²C **PCF8574 (0x20)**, e o Bruce espera botões em GPIO direto. Precisa de um
   `interface.cpp` custom (fase 2). Tela e LEDs já têm os pinos certos.
