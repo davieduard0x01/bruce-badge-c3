@@ -13,7 +13,13 @@ Base: Bruce `dev` commit `1d555e0`.
 - Binário: `pio run -e badge-c3` → `Bruce-badge-c3.bin` (~3.9 MB).
 - **Boot:** o app (3.67 MB) exige a partição `custom_4Mb_full.csv` (factory 3.75 MB);
   com a `custom_4Mb.csv` normal (2.44 MB) dá `Factory app partition is not bootable`.
-- **Estado atual:** compila, cabe, **boota e roda sem crash** (display bring-up resolvido).
+- **Estado atual:** compila, cabe, boota, nao crasha, mas TRAVA (hang) no tft.init().
+  Apos corrigir o crash da base do SPI, o TFT_eSPI entra em busy-wait
+  while(*_spi_cmd & SPI_USR) esperando uma transacao do SPI2 que nunca completa
+  (o SPI2 do C3 nao transaciona nesse caminho com a IDF 5.5). LEDs apagados
+  (trava antes de init_led), tela preta, sem serial. Proximo passo: habilitar/
+  clockar o SPI2 no init do TFT_eSPI C3. A tela funciona com Adafruit_ST7789
+  nos mesmos pinos (firmware L1System).
   **Causa raiz (decodificada):** a instrução `sw a5,16(zero)` grava `SPI_USR_MOSI`
   (0x08000000) no endereço absoluto `0x10`. `0x10` = offset do registrador SPI_USER
   dentro do bloco SPI → a **base do SPI2 resolveu para 0** no processor C3 do
