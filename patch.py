@@ -25,7 +25,7 @@ if not isfile(join(FRAMEWORK_DIR,mcu, "lib", ".patched")):
         FRAMEWORK_DIR, mcu, "lib", "libnet80211.a.patched"
     )
 
-    if mcu=="esp32c5" or mcu=="esp32c6" :
+    if mcu=="esp32c3" or mcu=="esp32c5" or mcu=="esp32c6" :
         env.Execute(
             "pio pkg exec -p toolchain-riscv32-esp -- riscv32-esp-elf-objcopy  --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s"
             % (original_file, patched_file)
