@@ -32,10 +32,26 @@ void _setup_gpio() {
     pinMode(FIRE_PIN, INPUT_PULLUP);
     for (uint8_t i = 0; i < 3; i++) {
         pinMode(BL_CAND[i], OUTPUT);
-        analogWrite(BL_CAND[i], 60); // acende a tela sem girar o motor
+        analogWrite(BL_CAND[i], 255); // backlight no maximo (diagnostico tela preta)
     }
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(100000);
+
+    // DIAGNOSTICO VISUAL: pisca cada candidato a backlight em sequencia, 3 rodadas.
+    // GPIO4 = 2 piscadas | GPIO5 = 3 piscadas | GPIO10 = 4 piscadas.
+    // Assim da pra ver qual pino acende a tela mesmo sem serial/TFT.
+    for (uint8_t round = 0; round < 3; round++) {
+        for (uint8_t i = 0; i < 3; i++) {
+            uint8_t blinks = i + 2;              // 4->2, 5->3, 10->4
+            for (uint8_t b = 0; b < blinks; b++) {
+                digitalWrite(BL_CAND[i], HIGH); delay(180);
+                digitalWrite(BL_CAND[i], LOW);  delay(180);
+            }
+            delay(700);                          // pausa entre pinos
+        }
+        delay(1200);                             // pausa entre rodadas
+    }
+    for (uint8_t i = 0; i < 3; i++) analogWrite(BL_CAND[i], 255); // deixa tudo aceso
 }
 
 int getBattery() { return 0; }
@@ -43,11 +59,14 @@ bool isCharging() { return false; }
 
 void _setBrightness(uint8_t brightval) {
     // backlight ainda nao confirmado; aplica em todos os candidatos
-    for (uint8_t i = 0; i < 3; i++) analogWrite(BL_CAND[i], brightval);
+    uint8_t v = brightval < 60 ? 200 : brightval; // piso p/ nao apagar a tela
+    for (uint8_t i = 0; i < 3; i++) analogWrite(BL_CAND[i], v);
 }
 
 void InputHandler(void) {
     static long tm = 0;
+    static long hb = 0;
+    if (millis() - hb > 2000) { hb = millis(); Serial.printf("[badge] alive t=%lu pcf=0x%02X\n", millis(), pcfRead()); }
     static uint16_t last = 0;
     if (millis() - tm < 60) return;
     tm = millis();
