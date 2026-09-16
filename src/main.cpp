@@ -492,6 +492,9 @@ void setup() {
     _pre_storage_gpio();
     begin_storage();
     RAM_LOG("after-storage"); // bruceConfig/bruceConfigPins loaded from FS
+    // badge-c3: orientacao fisica e fixa; forca a rotacao do compile-time por cima do
+    // valor salvo na config (senao o "rot" gravado no LittleFS sempre vence).
+    bruceConfigPins.rotation = ROTATION;
     begin_tft();
     init_clock();
     init_led();

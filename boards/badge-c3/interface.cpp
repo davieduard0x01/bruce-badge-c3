@@ -31,11 +31,10 @@ static uint8_t pcfRead() {
 }
 
 void _setup_gpio() {
-    // Para controlar o Bruce pelo navegador (a tela nao pinta no C3 ainda):
-    bruceConfig.startupApp = "WebUI";
-
     pinMode(FIRE_PIN, INPUT_PULLUP);
-    for (uint8_t i = 0; i < 3; i++) { pinMode(BL_CAND[i], OUTPUT); analogWrite(BL_CAND[i], 255); }
+    // Backlight: digitalWrite HIGH (on/off) em vez de analogWrite p/ nao depender de
+    // timer ledc (que pode faltar; ver "Tone start failed" no boot). 4/5/10 = pinos do L1System.
+    for (uint8_t i = 0; i < 3; i++) { pinMode(BL_CAND[i], OUTPUT); digitalWrite(BL_CAND[i], HIGH); }
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(100000);
 }
