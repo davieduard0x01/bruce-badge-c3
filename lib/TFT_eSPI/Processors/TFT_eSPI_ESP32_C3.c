@@ -61,6 +61,63 @@
   volatile uint32_t* _spi_w         = (volatile uint32_t*)(SPI_W0_REG(SPI_PORT));
 #endif
 
+// ============================================================================
+// badge-c3: backend de display via ESP-IDF spi_master.
+// Neste C3 + Arduino/IDF 5.5 as transferencias por poke de SPI_USR NUNCA completam
+// (nem as do TFT_eSPI nem as do HAL Arduino spi.transferBits). O unico caminho que
+// transmite de fato e o driver spi_master (spi_device_polling_transmit) — o mesmo
+// que o Adafruit_ST7789 usa e que pinta nestes pinos. Roteamos toda escrita por aqui.
+// CS/DC continuam manuais (TFT_eSPI faz o toggle); por isso spics_io_num = -1.
+// ============================================================================
+static spi_device_handle_t _bdg_dev = NULL;
+
+static void bdg_spi_init(void) {
+  if (_bdg_dev) return;
+  spi_bus_config_t bus = {};
+  bus.mosi_io_num = TFT_MOSI;
+  bus.miso_io_num = -1;
+  bus.sclk_io_num = TFT_SCLK;
+  bus.quadwp_io_num = -1;
+  bus.quadhd_io_num = -1;
+  bus.max_transfer_sz = 4096;
+  spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
+  spi_device_interface_config_t dev = {};
+  dev.clock_speed_hz = SPI_FREQUENCY;
+  dev.mode = 0;
+  dev.spics_io_num = -1;          // CS manual (TFT_eSPI toggle TFT_CS)
+  dev.queue_size = 1;
+  dev.flags = SPI_DEVICE_NO_DUMMY;
+  spi_bus_add_device(SPI2_HOST, &dev, &_bdg_dev);
+}
+
+// Envia n bytes exatamente como estao (MSB-first no fio).
+// Copia pra um buffer estatico alinhado (4 bytes) e DMA-capable: buffers na pilha
+// podem estar desalinhados -> DMA le lixo -> chuvisco na tela.
+void bdg_spi_write_bytes(const uint8_t *data, size_t n) {
+  if (!_bdg_dev) bdg_spi_init();
+  static __attribute__((aligned(4))) uint8_t dmabuf[512];
+  while (n) {
+    size_t c = n > sizeof(dmabuf) ? sizeof(dmabuf) : n;
+    memcpy(dmabuf, data, c);
+    spi_transaction_t t = {};
+    t.length = c * 8;
+    t.tx_buffer = dmabuf;
+    spi_device_polling_transmit(_bdg_dev, &t);
+    data += c; n -= c;
+  }
+}
+
+// Envia os B bits baixos de val em ordem LITTLE-ENDIAN (byte baixo primeiro).
+// O SPI do ESP32 transmite o registrador W nessa ordem, e as macros tft_Write do
+// TFT_eSPI ja fazem o swap contando com isso. Enviar big-endian embaralha os
+// enderecos de janela (CASET/RASET) -> pixels no lugar errado -> chuvisco.
+void bdg_spi_write_bits(uint32_t val, uint8_t bits) {
+  uint8_t buf[4];
+  uint8_t nb = bits >> 3;
+  for (uint8_t i = 0; i < nb; i++) buf[i] = (val >> (8 * i)) & 0xFF;
+  bdg_spi_write_bytes(buf, nb);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////
 #if defined (TFT_SDA_READ) && !defined (TFT_PARALLEL_8_BIT)
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -245,194 +302,39 @@ void TFT_eSPI::pushBlock(uint16_t color, uint32_t len){
 }
 //*/
 //*
+// badge-c3: o poke de registrador (SPI_USR) nao transmite neste C3+IDF5.5 (SPI_USR
+// nunca limpa). Usamos o driver Arduino/IDF (mesmo caminho do Adafruit_ST7789, que
+// pinta nestes pinos). writePattern repete a cor 16-bit len vezes.
 void TFT_eSPI::pushBlock(uint16_t color, uint32_t len){
-
-  volatile uint32_t* spi_w = _spi_w;
-  uint32_t color32 = (color<<8 | color >>8)<<16 | (color<<8 | color >>8);
-  uint32_t i = 0;
-  uint32_t rem = len & 0x1F;
-  len =  len - rem;
-
-  // Start with partial buffer pixels
-  if (rem)
-  {
-    while (*_spi_cmd&SPI_USR);
-    for (i=0; i < rem; i+=2) *spi_w++ = color32;
-    *_spi_mosi_dlen = (rem << 4) - 1;
-#if CONFIG_IDF_TARGET_ESP32C3
-    *_spi_cmd = SPI_UPDATE;
-    while (*_spi_cmd & SPI_UPDATE);
-#endif
-    *_spi_cmd = SPI_USR;
-    if (!len) return; //{while (*_spi_cmd&SPI_USR); return; }
-    i = i>>1; while(i++<16) *spi_w++ = color32;
-  }
-
-  while (*_spi_cmd&SPI_USR);
-  if (!rem) while (i++<16) *spi_w++ = color32;
-  *_spi_mosi_dlen =  511;
-
-  // End with full buffer to maximise useful time for downstream code
-  while(len)
-  {
-    while (*_spi_cmd&SPI_USR);
-#if CONFIG_IDF_TARGET_ESP32C3
-    *_spi_cmd = SPI_UPDATE;
-    while (*_spi_cmd & SPI_UPDATE);
-#endif
-    *_spi_cmd = SPI_USR;
-    len -= 32;
-  }
-
-  // Do not wait here
-  //while (*_spi_cmd&SPI_USR);
+  uint8_t buf[256];                              // 128 pixels
+  for (int i = 0; i < 128; i++) { buf[i*2] = color >> 8; buf[i*2+1] = color & 0xFF; }
+  while (len) { uint32_t n = len > 128 ? 128 : len; bdg_spi_write_bytes(buf, n*2); len -= n; }
 }
 //*/
 /***************************************************************************************
 ** Function name:           pushSwapBytePixels - for ESP32
 ** Description:             Write a sequence of pixels with swapped bytes
 ***************************************************************************************/
-void TFT_eSPI::pushSwapBytePixels(const void* data_in, uint32_t len){
-
-  uint8_t* data = (uint8_t*)data_in;
-  uint32_t color[16];
-
-  if (len > 31)
-  {
-    WRITE_PERI_REG(SPI_MOSI_DLEN_REG(SPI_PORT), 511);
-    while(len>31)
-    {
-      uint32_t i = 0;
-      while(i<16)
-      {
-        color[i++] = DAT8TO32(data);
-        data+=4;
-      }
-      while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_USR);
-      WRITE_PERI_REG(SPI_W0_REG(SPI_PORT),  color[0]);
-      WRITE_PERI_REG(SPI_W1_REG(SPI_PORT),  color[1]);
-      WRITE_PERI_REG(SPI_W2_REG(SPI_PORT),  color[2]);
-      WRITE_PERI_REG(SPI_W3_REG(SPI_PORT),  color[3]);
-      WRITE_PERI_REG(SPI_W4_REG(SPI_PORT),  color[4]);
-      WRITE_PERI_REG(SPI_W5_REG(SPI_PORT),  color[5]);
-      WRITE_PERI_REG(SPI_W6_REG(SPI_PORT),  color[6]);
-      WRITE_PERI_REG(SPI_W7_REG(SPI_PORT),  color[7]);
-      WRITE_PERI_REG(SPI_W8_REG(SPI_PORT),  color[8]);
-      WRITE_PERI_REG(SPI_W9_REG(SPI_PORT),  color[9]);
-      WRITE_PERI_REG(SPI_W10_REG(SPI_PORT), color[10]);
-      WRITE_PERI_REG(SPI_W11_REG(SPI_PORT), color[11]);
-      WRITE_PERI_REG(SPI_W12_REG(SPI_PORT), color[12]);
-      WRITE_PERI_REG(SPI_W13_REG(SPI_PORT), color[13]);
-      WRITE_PERI_REG(SPI_W14_REG(SPI_PORT), color[14]);
-      WRITE_PERI_REG(SPI_W15_REG(SPI_PORT), color[15]);
-#if CONFIG_IDF_TARGET_ESP32C3
-      SET_PERI_REG_MASK(SPI_CMD_REG(SPI_PORT), SPI_UPDATE);
-      while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_UPDATE);
-#endif
-      SET_PERI_REG_MASK(SPI_CMD_REG(SPI_PORT), SPI_USR);
-      len -= 32;
-    }
+void TFT_eSPI::pushSwapBytePixels(const void* data_in, uint32_t len) {
+  // badge-c3: driver IDF. Troca os bytes (RGB565) e envia em blocos.
+  const uint8_t* d = (const uint8_t*)data_in;
+  uint8_t buf[64];
+  while (len) {
+    uint32_t n = len > 32 ? 32 : len;   // 32 px = 64 bytes
+    for (uint32_t i = 0; i < n; i++) { buf[i*2] = d[i*2+1]; buf[i*2+1] = d[i*2]; }
+    bdg_spi_write_bytes(buf, n*2);
+    d += n*2; len -= n;
   }
-
-  if (len > 15)
-  {
-    uint32_t i = 0;
-    while(i<8)
-    {
-      color[i++] = DAT8TO32(data);
-      data+=4;
-    }
-    while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_USR);
-    WRITE_PERI_REG(SPI_MOSI_DLEN_REG(SPI_PORT), 255);
-    WRITE_PERI_REG(SPI_W0_REG(SPI_PORT),  color[0]);
-    WRITE_PERI_REG(SPI_W1_REG(SPI_PORT),  color[1]);
-    WRITE_PERI_REG(SPI_W2_REG(SPI_PORT),  color[2]);
-    WRITE_PERI_REG(SPI_W3_REG(SPI_PORT),  color[3]);
-    WRITE_PERI_REG(SPI_W4_REG(SPI_PORT),  color[4]);
-    WRITE_PERI_REG(SPI_W5_REG(SPI_PORT),  color[5]);
-    WRITE_PERI_REG(SPI_W6_REG(SPI_PORT),  color[6]);
-    WRITE_PERI_REG(SPI_W7_REG(SPI_PORT),  color[7]);
-#if CONFIG_IDF_TARGET_ESP32C3
-    SET_PERI_REG_MASK(SPI_CMD_REG(SPI_PORT), SPI_UPDATE);
-    while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_UPDATE);
-#endif
-    SET_PERI_REG_MASK(SPI_CMD_REG(SPI_PORT), SPI_USR);
-    len -= 16;
-  }
-
-  if (len)
-  {
-    while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_USR);
-    WRITE_PERI_REG(SPI_MOSI_DLEN_REG(SPI_PORT), (len << 4) - 1);
-    for (uint32_t i=0; i <= (len<<1); i+=4) {
-      WRITE_PERI_REG(SPI_W0_REG(SPI_PORT)+i, DAT8TO32(data)); data+=4;
-    }
-#if CONFIG_IDF_TARGET_ESP32C3
-    SET_PERI_REG_MASK(SPI_CMD_REG(SPI_PORT), SPI_UPDATE);
-    while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_UPDATE);
-#endif
-    SET_PERI_REG_MASK(SPI_CMD_REG(SPI_PORT), SPI_USR);
-  }
-  while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_USR);
-
 }
 
 /***************************************************************************************
 ** Function name:           pushPixels - for ESP32
 ** Description:             Write a sequence of pixels
 ***************************************************************************************/
-void TFT_eSPI::pushPixels(const void* data_in, uint32_t len){
-
-  if(_swapBytes) {
-    pushSwapBytePixels(data_in, len);
-    return;
-  }
-
-  uint32_t *data = (uint32_t*)data_in;
-
-  if (len > 31)
-  {
-    WRITE_PERI_REG(SPI_MOSI_DLEN_REG(SPI_PORT), 511);
-    while(len>31)
-    {
-      while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_USR);
-      WRITE_PERI_REG(SPI_W0_REG(SPI_PORT),  *data++);
-      WRITE_PERI_REG(SPI_W1_REG(SPI_PORT),  *data++);
-      WRITE_PERI_REG(SPI_W2_REG(SPI_PORT),  *data++);
-      WRITE_PERI_REG(SPI_W3_REG(SPI_PORT),  *data++);
-      WRITE_PERI_REG(SPI_W4_REG(SPI_PORT),  *data++);
-      WRITE_PERI_REG(SPI_W5_REG(SPI_PORT),  *data++);
-      WRITE_PERI_REG(SPI_W6_REG(SPI_PORT),  *data++);
-      WRITE_PERI_REG(SPI_W7_REG(SPI_PORT),  *data++);
-      WRITE_PERI_REG(SPI_W8_REG(SPI_PORT),  *data++);
-      WRITE_PERI_REG(SPI_W9_REG(SPI_PORT),  *data++);
-      WRITE_PERI_REG(SPI_W10_REG(SPI_PORT), *data++);
-      WRITE_PERI_REG(SPI_W11_REG(SPI_PORT), *data++);
-      WRITE_PERI_REG(SPI_W12_REG(SPI_PORT), *data++);
-      WRITE_PERI_REG(SPI_W13_REG(SPI_PORT), *data++);
-      WRITE_PERI_REG(SPI_W14_REG(SPI_PORT), *data++);
-      WRITE_PERI_REG(SPI_W15_REG(SPI_PORT), *data++);
-#if CONFIG_IDF_TARGET_ESP32C3
-      SET_PERI_REG_MASK(SPI_CMD_REG(SPI_PORT), SPI_UPDATE);
-      while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_UPDATE);
-#endif
-      SET_PERI_REG_MASK(SPI_CMD_REG(SPI_PORT), SPI_USR);
-      len -= 32;
-    }
-  }
-
-  if (len)
-  {
-    while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_USR);
-    WRITE_PERI_REG(SPI_MOSI_DLEN_REG(SPI_PORT), (len << 4) - 1);
-    for (uint32_t i=0; i <= (len<<1); i+=4) WRITE_PERI_REG((SPI_W0_REG(SPI_PORT) + i), *data++);
-#if CONFIG_IDF_TARGET_ESP32C3
-      SET_PERI_REG_MASK(SPI_CMD_REG(SPI_PORT), SPI_UPDATE);
-      while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_UPDATE);
-#endif
-    SET_PERI_REG_MASK(SPI_CMD_REG(SPI_PORT), SPI_USR);
-  }
-  while (READ_PERI_REG(SPI_CMD_REG(SPI_PORT))&SPI_USR);
+void TFT_eSPI::pushPixels(const void* data_in, uint32_t len) {
+  // badge-c3: driver IDF.
+  if (_swapBytes) { pushSwapBytePixels(data_in, len); return; }
+  bdg_spi_write_bytes((const uint8_t*)data_in, len*2);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////

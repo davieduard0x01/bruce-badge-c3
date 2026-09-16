@@ -79,7 +79,7 @@ inline void TFT_eSPI::begin_tft_write(void){
   xSemaphoreTakeRecursive(tftMutex, portMAX_DELAY);
   if (locked) {
     locked = false; // Flag to show SPI access now unlocked
-#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE)
+#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE) && !defined(CONFIG_IDF_TARGET_ESP32C3)
     spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, TFT_SPI_MODE));
 #endif
     CS_L;
@@ -91,7 +91,7 @@ inline void TFT_eSPI::begin_tft_write(void){
 void TFT_eSPI::begin_nin_write(void){
   if (locked) {
     locked = false; // Flag to show SPI access now unlocked
-#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE)
+#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE) && !defined(CONFIG_IDF_TARGET_ESP32C3)
     spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, TFT_SPI_MODE));
 #endif
     CS_L;
@@ -110,7 +110,7 @@ inline void TFT_eSPI::end_tft_write(void){
       SPI_BUSY_CHECK;       // Check send complete and clean out unused rx data
       CS_H;
       SET_BUS_READ_MODE;    // In case bus has been configured for tx only
-#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE)
+#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE) && !defined(CONFIG_IDF_TARGET_ESP32C3)
       spi.endTransaction();
 #endif
     }
@@ -126,7 +126,7 @@ inline void TFT_eSPI::end_nin_write(void){
       SPI_BUSY_CHECK;       // Check send complete and clean out unused rx data
       CS_H;
       SET_BUS_READ_MODE;    // In case SPI has been configured for tx only
-#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE)
+#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE) && !defined(CONFIG_IDF_TARGET_ESP32C3)
       spi.endTransaction();
 #endif
     }
@@ -140,7 +140,7 @@ inline void TFT_eSPI::end_nin_write(void){
 // Reads require a lower SPI clock rate than writes
 inline void TFT_eSPI::begin_tft_read(void){
   DMA_BUSY_CHECK; // Wait for any DMA transfer to complete before changing SPI settings
-#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE)
+#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE) && !defined(CONFIG_IDF_TARGET_ESP32C3)
   if (locked) {
     locked = false;
     spi.beginTransaction(SPISettings(SPI_READ_FREQUENCY, MSBFIRST, TFT_SPI_MODE));
@@ -160,7 +160,7 @@ inline void TFT_eSPI::begin_tft_read(void){
 ** Description:             End transaction for reads and deselect TFT
 ***************************************************************************************/
 inline void TFT_eSPI::end_tft_read(void){
-#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE)
+#if defined (SPI_HAS_TRANSACTION) && defined (SUPPORT_TRANSACTIONS) && !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE) && !defined(CONFIG_IDF_TARGET_ESP32C3)
   if(!inTransaction) {
     if (!locked) {
       locked = true;
@@ -649,7 +649,9 @@ void TFT_eSPI::init(uint8_t tc)
   spi.begin(); // This will set HMISO to input
 
 #else
-  #if !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE)
+  // badge-c3: NAO iniciar o SPI do Arduino no C3 — o barramento e do driver IDF
+  // (bdg_spi_init). Dois donos do SPI2 (Arduino HAL + IDF) impedem o clock de sair.
+  #if !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE) && !defined(CONFIG_IDF_TARGET_ESP32C3)
     #if defined (TFT_MOSI) && !defined (TFT_SPI_OVERLAP) && !defined(ARDUINO_ARCH_RP2040) && !defined (ARDUINO_ARCH_MBED)
       spi.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, -1); // This will set MISO to input
     #else

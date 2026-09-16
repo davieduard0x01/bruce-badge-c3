@@ -122,11 +122,9 @@ SPI3_HOST = 2
 #define DMA_BUSY_CHECK
 #endif
 
-#if defined(TFT_PARALLEL_8_BIT)
+// badge-c3: transferencias via driver Arduino/IDF (spi.transferBits/writeBytes) sao
+// sincronas, entao nao ha bit de "busy" a esperar depois.
 #define SPI_BUSY_CHECK
-#else
-#define SPI_BUSY_CHECK while (*_spi_cmd & SPI_USR)
-#endif
 
 // If smooth font is used then it is likely SPIFFS will be needed
 #ifdef SMOOTH_FONT
@@ -250,6 +248,24 @@ SPI3_HOST = 2
 #define CS_H
 #endif
 #endif
+#endif
+
+// badge-c3: CS/DC via digitalWrite garantido (o poke em GPIO.out_w1ts pode nao bater
+// no C3; se o CS nao desce, o painel nunca e selecionado e ignora tudo).
+#if defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(TFT_PARALLEL_8_BIT)
+#undef CS_L
+#undef CS_H
+#undef DC_C
+#undef DC_D
+#if (TFT_CS >= 0)
+#define CS_L digitalWrite(TFT_CS, LOW)
+#define CS_H digitalWrite(TFT_CS, HIGH)
+#else
+#define CS_L
+#define CS_H
+#endif
+#define DC_C digitalWrite(TFT_DC, LOW)
+#define DC_D digitalWrite(TFT_DC, HIGH)
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -626,13 +642,10 @@ SPI3_HOST = 2
     *_spi_cmd = SPI_USR;                                                                                     \
     while (*_spi_cmd & SPI_USR);
 #else
-#define TFT_WRITE_BITS(D, B)                                                                                 \
-    *_spi_mosi_dlen = B - 1;                                                                                 \
-    *_spi_w = D;                                                                                             \
-    *_spi_cmd = SPI_UPDATE;                                                                                  \
-    while (*_spi_cmd & SPI_UPDATE);                                                                          \
-    *_spi_cmd = SPI_USR;                                                                                     \
-    while (*_spi_cmd & SPI_USR);
+// badge-c3: poke de registrador nao transmite neste C3+IDF5.5. Usa o driver IDF spi_master.
+void bdg_spi_write_bits(uint32_t val, uint8_t bits);
+void bdg_spi_write_bytes(const uint8_t *data, size_t n);
+#define TFT_WRITE_BITS(D, B) bdg_spi_write_bits((uint32_t)(D), (B))
 #endif
 // Write 8 bits
 #define tft_Write_8(C) TFT_WRITE_BITS(C, 8)
@@ -648,12 +661,7 @@ SPI3_HOST = 2
     *_spi_w = ((C) << 8 | (C) >> 8);                                                                         \
     *_spi_cmd = SPI_USR;
 #else
-#define tft_Write_16N(C)                                                                                     \
-    *_spi_mosi_dlen = 16 - 1;                                                                                \
-    *_spi_w = ((C) << 8 | (C) >> 8);                                                                         \
-    *_spi_cmd = SPI_UPDATE;                                                                                  \
-    while (*_spi_cmd & SPI_UPDATE);                                                                          \
-    *_spi_cmd = SPI_USR;
+#define tft_Write_16N(C) bdg_spi_write_bits((uint32_t)((C) << 8 | (C) >> 8), 16)
 #endif
 
 // Write 16 bits
